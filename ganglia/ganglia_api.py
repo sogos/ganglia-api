@@ -5,18 +5,22 @@
 #
 ########################################
 
-import os
-import sys
-import glob
-import re
-import logging
-import socket
-import select
 import datetime
+import glob
+import logging
+import os
+import re
+import select
+import socket
+import sys
 import time
 from xml.etree import ElementTree
 from xml.parsers.expat import ExpatError
-from urllib import quote
+
+try:
+    from urllib import quote  # Python 2.X
+except ImportError:
+    from urllib.parse import quote  # Python 3+
 from threading import Thread
 
 import tornado.httpserver
@@ -29,12 +33,15 @@ import settings
 
 __version__ = '2.0.0'
 
+ganglia_config = None
+ganglia_data = None
+
 define("port", default=8080, help="run on the given port", type=int)
 
 logging.basicConfig(level=logging.DEBUG if settings.DEBUG else logging.INFO,
                     format="%(asctime)s %(name)s[%(process)d] %(levelname)s - %(message)s",
                     filename=settings.LOGFILE)
-global logger
+
 logger = logging.getLogger("ganglia-api")
 
 
@@ -57,7 +64,7 @@ class ApiMetric:
     def id(self):
         group = self.group if self.group is not None else ""
         id_elements = [self.environment, self.grid.name, self.cluster.name, self.host.name, group, self.name]
-        return str.lower(".".join(filter(lambda (e): e is not None, id_elements)))
+        return str.lower(".".join(filter(None,id_elements)))
 
     def api_dict(self):
         type, units = ApiMetric.metric_type(self.type, self.units, self.slope)
@@ -81,7 +88,7 @@ class ApiMetric:
                       int(self.host.reported) + int(self.host.tn) - int(self.tn)).isoformat() + ".000Z",
                   'graphUrl': self.graph_url,
                   'dataUrl': self.data_url}
-        return dict(filter(lambda (k, v): v is not None, metric.items()))
+        return dict((k, v) for k, v in metric.items() if v is not None)
 
     @staticmethod
     def parse_tags(tag_string):
@@ -110,7 +117,7 @@ class ApiMetric:
 
     def __str__(self):
         return "%s %s %s %s %s %s" % (
-        self.environment, self.grid.name, self.cluster.name, self.host.name, self.group, self.name)
+            self.environment, self.grid.name, self.cluster.name, self.host.name, self.group, self.name)
 
 
 class Metric(Elem, ApiMetric):
@@ -175,6 +182,7 @@ class Metric(Elem, ApiMetric):
     def html_dir(self):
         return 'ganglia-' + self.environment + '-' + self.grid.name
 
+
 # Artificial metric generated from the Host
 class HeartbeatMetric(ApiMetric):
     def __init__(self, host, cluster, grid, environment):
@@ -213,13 +221,13 @@ class GangliaGmetad:
             if not r:
                 sock.close()
                 return
-        except socket.error, e:
+        except socket.error as e:
             logger.warning('Could not open socket to %s:%d - %s', host, port, e)
             return
 
         try:
             if send is not None: sock.send(send)
-        except socket.error, e:
+        except socket.error as e:
             logger.warning('Could not send to %s:%d - %s', host, port, e)
             return
 
@@ -227,7 +235,7 @@ class GangliaGmetad:
         while True:
             try:
                 data = sock.recv(8192)
-            except socket.error, e:
+            except socket.error as e:
                 logger.warning('Could not receive data from %s:%d - %s', host, port, e)
                 return
 
@@ -275,7 +283,7 @@ class GangliaGmetad:
         if interactive_data:
             try:
                 ganglia = ElementTree.XML(interactive_data)
-            except ExpatError, e:
+            except ExpatError as e:
                 logging.error('Could not parse XML data: %s', e)
                 return result
         else:
@@ -326,7 +334,8 @@ class GangliaConfig:
             ports = GangliaGmetad(environment, xml_port, interactive_port)
 
             result[environment] = ports
-            logger.info('Found %s (env=%s) with ports %d and %d', file, environment, ports.xml_port, ports.interactive_port)
+            logger.info('Found %s (env=%s) with ports %d and %d', file, environment, ports.xml_port,
+                        ports.interactive_port)
 
         return result
 
@@ -395,10 +404,10 @@ class ApiHandler(tornado.web.RequestHandler):
 
         def is_match(metric):
             return (emptyOrContains(metric_list, metric.name)
-                and emptyOrContains(group_list, metric.group)
-                and emptyOrContains(host_list, metric.host.name)
-                and emptyOrContains(cluster_list, metric.cluster.name)
-                and emptyOrContains(grid, metric.grid.name))
+                    and emptyOrContains(group_list, metric.group)
+                    and emptyOrContains(host_list, metric.host.name)
+                    and emptyOrContains(cluster_list, metric.cluster.name)
+                    and emptyOrContains(grid, metric.grid.name))
 
         gmetad_list = ganglia_config.get_gmetad_for(environment)
         metric_dicts = list()
@@ -428,11 +437,11 @@ def main():
             sys.exit(1)
         except OSError:
             pass
-    file(settings.PIDFILE, 'w').write(str(os.getpid()))
+
+    open(settings.PIDFILE, 'w').write(str(os.getpid()))
 
     global ganglia_config
     ganglia_config = GangliaConfig()
-
     global ganglia_data
     ganglia_data = GmetadData()
     poll_thread = GangliaPollThread()
